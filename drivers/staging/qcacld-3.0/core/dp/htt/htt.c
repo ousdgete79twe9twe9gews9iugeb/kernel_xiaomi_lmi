@@ -471,8 +471,6 @@ htt_pdev_alloc(ol_txrx_pdev_handle txrx_pdev,
 	HTT_TX_MUTEX_INIT(&pdev->credit_mutex);
 	if (htt_htc_attach_all(pdev))
 		goto htt_htc_attach_fail;
-	if (hif_ce_fastpath_cb_register(osc, htt_t2h_msg_handler_fast, pdev))
-		qdf_print("failed to register fastpath callback\n");
 
 success:
 	return pdev;
