@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2013, 2015-2017, 2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, 2015-2017, 2019-2020 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -66,7 +66,10 @@ do {									\
 #define BLKSIZE_1024		2
 #define BLKSIZE_2048		3
 
+#define FLUSHPERIOD_1	    0x1
 #define FLUSHPERIOD_2048	0x800
+
+#define PERFLSHEOT_BIT	    BIT(18)
 
 struct csr_drvdata {
 	void __iomem		*base;
@@ -79,10 +82,12 @@ struct csr_drvdata {
 	struct clk		*clk;
 	spinlock_t		spin_lock;
 	bool			usb_bam_support;
+	bool			perflsheot_set_support;
 	bool			hwctrl_set_support;
 	bool			set_byte_cntr_support;
 	bool			timestamp_support;
 	bool			enable_flush;
+	bool			aodbg_csr_support;
 };
 
 static LIST_HEAD(csr_list);
@@ -152,6 +157,8 @@ void msm_qdss_csr_enable_flush(struct coresight_csr *csr)
 
 	usbflshctrl = csr_readl(drvdata, CSR_USBFLSHCTRL);
 	usbflshctrl |= 0x2;
+	if (drvdata->perflsheot_set_support)
+		usbflshctrl |= PERFLSHEOT_BIT;
 	csr_writel(drvdata, usbflshctrl, CSR_USBFLSHCTRL);
 
 	CSR_LOCK(drvdata);
@@ -204,6 +211,8 @@ void msm_qdss_csr_disable_flush(struct coresight_csr *csr)
 
 	usbflshctrl = csr_readl(drvdata, CSR_USBFLSHCTRL);
 	usbflshctrl &= ~0x2;
+	if (drvdata->perflsheot_set_support)
+		usbflshctrl &= ~PERFLSHEOT_BIT;
 	csr_writel(drvdata, usbflshctrl, CSR_USBFLSHCTRL);
 
 	CSR_LOCK(drvdata);
@@ -297,6 +306,7 @@ static ssize_t timestamp_show(struct device *dev,
 	uint32_t val, time_val0, time_val1;
 	int ret;
 	unsigned long flags;
+	unsigned long csr_ts_offset = 0;
 
 	struct csr_drvdata *drvdata = dev_get_drvdata(dev->parent);
 
@@ -305,6 +315,9 @@ static ssize_t timestamp_show(struct device *dev,
 		return 0;
 	}
 
+	if (drvdata->aodbg_csr_support)
+		csr_ts_offset = 0x14;
+
 	ret = clk_prepare_enable(drvdata->clk);
 	if (ret)
 		return ret;
@@ -312,16 +325,16 @@ static ssize_t timestamp_show(struct device *dev,
 	spin_lock_irqsave(&drvdata->spin_lock, flags);
 	CSR_UNLOCK(drvdata);
 
-	val = csr_readl(drvdata, CSR_TIMESTAMPCTRL);
+	val = csr_readl(drvdata, CSR_TIMESTAMPCTRL - csr_ts_offset);
 
 	val  = val & ~BIT(0);
-	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL);
+	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL - csr_ts_offset);
 
 	val  = val | BIT(0);
-	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL);
+	csr_writel(drvdata, val, CSR_TIMESTAMPCTRL - csr_ts_offset);
 
-	time_val0 = csr_readl(drvdata, CSR_QDSSTIMEVAL0);
-	time_val1 = csr_readl(drvdata, CSR_QDSSTIMEVAL1);
+	time_val0 = csr_readl(drvdata, CSR_QDSSTIMEVAL0 - csr_ts_offset);
+	time_val1 = csr_readl(drvdata, CSR_QDSSTIMEVAL1 - csr_ts_offset);
 
 	CSR_LOCK(drvdata);
 	spin_unlock_irqrestore(&drvdata->spin_lock, flags);
@@ -468,7 +481,22 @@ static int csr_probe(struct platform_device *pdev)
 	else
 		dev_dbg(dev, "timestamp_support operation supported\n");
 
-	if (drvdata->usb_bam_support)
+	drvdata->aodbg_csr_support = of_property_read_bool(pdev->dev.of_node,
+						"qcom,aodbg-csr-support");
+	if (!drvdata->aodbg_csr_support)
+		dev_dbg(dev, "aodbg_csr_support operation not supported\n");
+	else
+		dev_dbg(dev, "aodbg_csr_support operation supported\n");
+	drvdata->perflsheot_set_support = of_property_read_bool(
+			pdev->dev.of_node, "qcom,perflsheot-set-support");
+	if (!drvdata->perflsheot_set_support)
+		dev_dbg(dev, "perflsheot_set_support handled by other subsystem\n");
+	else
+		dev_dbg(dev, "perflsheot_set_support operation supported\n");
+
+	if (drvdata->perflsheot_set_support)
+		drvdata->flushperiod = FLUSHPERIOD_1;
+	else if (drvdata->usb_bam_support)
 		drvdata->flushperiod = FLUSHPERIOD_2048;
 
 	desc = devm_kzalloc(dev, sizeof(*desc), GFP_KERNEL);

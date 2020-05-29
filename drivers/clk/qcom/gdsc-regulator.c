@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -74,6 +74,7 @@ struct gdsc {
 	int			reset_count;
 	int			root_clk_idx;
 	u32			gds_timeout;
+	bool			skip_disable_before_enable;
 };
 
 enum gdscr_status {
@@ -366,12 +367,14 @@ static int gdsc_enable(struct regulator_dev *rdev)
 		clk_disable_unprepare(sc->clocks[sc->root_clk_idx]);
 
 	sc->is_gdsc_enabled = true;
+	sc->skip_disable_before_enable = false;
 end:
 	if (ret && sc->bus_handle) {
 		msm_bus_scale_client_update_request(sc->bus_handle, 0);
 		sc->is_bus_enabled = false;
 	}
-	if (sc->parent_regulator)
+
+	if (ret && sc->parent_regulator)
 		regulator_set_voltage(sc->parent_regulator, 0, INT_MAX);
 
 	return ret;
@@ -383,11 +386,14 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	uint32_t regval;
 	int i, ret = 0;
 
-	if (sc->parent_regulator) {
-		ret = regulator_set_voltage(sc->parent_regulator,
-				RPMH_REGULATOR_LEVEL_LOW_SVS, INT_MAX);
-		if (ret)
-			return ret;
+	/*
+	 * Protect GDSC against late_init disabling when the GDSC is enabled
+	 * by an entity outside external to HLOS.
+	 */
+	if (sc->skip_disable_before_enable) {
+		dev_dbg(&rdev->dev, "Skip Disabling: %s\n", sc->rdesc.name);
+		sc->skip_disable_before_enable = false;
+		return 0;
 	}
 
 	if (sc->force_root_en)
@@ -676,6 +682,8 @@ static int gdsc_parse_dt_data(struct gdsc *sc, struct device *dev,
 					"qcom,no-status-check-on-disable");
 	sc->retain_ff_enable = of_property_read_bool(dev->of_node,
 						"qcom,retain-regs");
+	sc->skip_disable_before_enable = of_property_read_bool(dev->of_node,
+					"qcom,skip-disable-before-sw-enable");
 
 	sc->toggle_logic = !of_property_read_bool(dev->of_node,
 						"qcom,skip-logic-collapse");

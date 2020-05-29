@@ -3,7 +3,7 @@
  *
  * This code is based on drivers/scsi/ufs/ufshcd.c
  * Copyright (C) 2011-2013 Samsung India Software Operations
- * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  *
  * Authors:
  *	Santosh Yaraganavi <santosh.sy@samsung.com>
@@ -467,9 +467,13 @@ static struct ufs_dev_fix ufs_fixups[] = {
 		UFS_DEVICE_QUIRK_DELAY_BEFORE_LPM),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
 		UFS_DEVICE_NO_FASTAUTO),
+	UFS_FIX(UFS_VENDOR_MICRON, UFS_ANY_MODEL,
+		UFS_DEVICE_NO_FASTAUTO),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL,
 		UFS_DEVICE_QUIRK_HOST_PA_TACTIVATE),
 	UFS_FIX(UFS_VENDOR_WDC, UFS_ANY_MODEL,
+		UFS_DEVICE_QUIRK_HOST_PA_TACTIVATE),
+	UFS_FIX(UFS_VENDOR_SKHYNIX, UFS_ANY_MODEL,
 		UFS_DEVICE_QUIRK_HOST_PA_TACTIVATE),
 	UFS_FIX(UFS_VENDOR_SAMSUNG, UFS_ANY_MODEL, UFS_DEVICE_NO_VCCQ),
 	UFS_FIX(UFS_VENDOR_TOSHIBA, UFS_ANY_MODEL,
@@ -1527,7 +1531,8 @@ static int ufshcd_set_clk_freq(struct ufs_hba *hba, bool scale_up)
 	list_for_each_entry(clki, head, list) {
 		if (!IS_ERR_OR_NULL(clki->clk)) {
 			if (scale_up && clki->max_freq) {
-				if (clki->curr_freq == clki->max_freq)
+				if ((clki->curr_freq == clki->max_freq) ||
+				   (!strcmp(clki->name, "core_clk_ice_hw_ctl")))
 					continue;
 
 				ret = clk_set_rate(clki->clk, clki->max_freq);
@@ -1545,7 +1550,8 @@ static int ufshcd_set_clk_freq(struct ufs_hba *hba, bool scale_up)
 				clki->curr_freq = clki->max_freq;
 
 			} else if (!scale_up && clki->min_freq) {
-				if (clki->curr_freq == clki->min_freq)
+				if ((clki->curr_freq == clki->min_freq) ||
+				   (!strcmp(clki->name, "core_clk_ice_hw_ctl")))
 					continue;
 
 				ret = clk_set_rate(clki->clk, clki->min_freq);
@@ -2373,7 +2379,9 @@ static void ufshcd_gate_work(struct work_struct *work)
 						clk_gating.gate_work);
 	unsigned long flags;
 
-	ufs_spin_lock_irqsave(hba->host->host_lock, flags);
+	spin_lock_irqsave(hba->host->host_lock, flags);
+	if (hba->clk_gating.state == CLKS_OFF)
+		goto rel_lock;
 	/*
 	 * In case you are here to cancel this work the gating state
 	 * would be marked as REQ_CLKS_ON. In this case save time by
@@ -6257,6 +6265,37 @@ static int ufshcd_get_lu_wp(struct ufs_hba *hba,
 	return ret;
 }
 
+/*
+ * ufshcd_get_wb_alloc_units - returns "dLUNumWriteBoosterBufferAllocUnits"
+ * @hba: per-adapter instance
+ * @lun: UFS device lun id
+ * @d_lun_wbb_au: pointer to buffer to hold the LU's alloc units info
+ *
+ * Returns 0 in case of success and d_lun_wbb_au would be returned
+ * Returns -ENOTSUPP if reading d_lun_wbb_au is not supported.
+ * Returns -EINVAL in case of invalid parameters passed to this function.
+ */
+static int ufshcd_get_wb_alloc_units(struct ufs_hba *hba,
+			    u8 lun,
+			    u8 *d_lun_wbb_au)
+{
+	int ret;
+
+	if (!d_lun_wbb_au)
+		ret = -EINVAL;
+
+	/* WB can be supported only from LU0..LU7 */
+	else if (lun >= UFS_UPIU_MAX_GENERAL_LUN)
+		ret = -ENOTSUPP;
+	else
+		ret = ufshcd_read_unit_desc_param(hba,
+					  lun,
+					  UNIT_DESC_PARAM_WB_BUF_ALLOC_UNITS,
+					  d_lun_wbb_au,
+					  sizeof(*d_lun_wbb_au));
+	return ret;
+}
+
 /**
  * ufshcd_get_lu_power_on_wp_status - get LU's power on write protect
  * status
@@ -7045,8 +7084,10 @@ out:
 
 static bool ufshcd_wb_sup(struct ufs_hba *hba)
 {
-	return !!(hba->dev_info.d_ext_ufs_feature_sup &
-		  UFS_DEV_WRITE_BOOSTER_SUP);
+	return ((hba->dev_info.d_ext_ufs_feature_sup &
+		   UFS_DEV_WRITE_BOOSTER_SUP) &&
+		  (hba->dev_info.b_wb_buffer_type
+		   || hba->dev_info.wb_config_lun));
 }
 
 static int ufshcd_wb_ctrl(struct ufs_hba *hba, bool enable)
@@ -8646,7 +8687,8 @@ static int ufs_get_device_desc(struct ufs_hba *hba,
 	int err;
 	size_t buff_len;
 	u8 model_index;
-	u8 *desc_buf;
+	u8 *desc_buf, wb_buf[4];
+	u32 lun, res;
 
 	buff_len = max_t(size_t, hba->desc_size.dev_desc,
 			 QUERY_DESC_MAX_SIZE + 1);
@@ -8678,7 +8720,7 @@ static int ufs_get_device_desc(struct ufs_hba *hba,
 	if ((dev_desc->wspecversion >= 0x310) ||
 	    (dev_desc->wmanufacturerid == UFS_VENDOR_TOSHIBA &&
 	     dev_desc->wspecversion >= 0x300 &&
-	     hba->desc_size.dev_desc >= 0x59))
+	     hba->desc_size.dev_desc >= 0x59)) {
 		hba->dev_info.d_ext_ufs_feature_sup =
 			desc_buf[DEVICE_DESC_PARAM_EXT_UFS_FEATURE_SUP]
 								<< 24 |
@@ -8687,7 +8729,29 @@ static int ufs_get_device_desc(struct ufs_hba *hba,
 			desc_buf[DEVICE_DESC_PARAM_EXT_UFS_FEATURE_SUP + 2]
 								<< 8 |
 			desc_buf[DEVICE_DESC_PARAM_EXT_UFS_FEATURE_SUP + 3];
+		hba->dev_info.b_wb_buffer_type =
+			desc_buf[DEVICE_DESC_PARAM_WB_TYPE];
 
+		if (hba->dev_info.b_wb_buffer_type)
+			goto skip_unit_desc;
+
+		hba->dev_info.wb_config_lun = false;
+		for (lun = 0; lun < UFS_UPIU_MAX_GENERAL_LUN; lun++) {
+			memset(wb_buf, 0, sizeof(wb_buf));
+			err = ufshcd_get_wb_alloc_units(hba, lun, wb_buf);
+			if (err)
+				break;
+
+			res = wb_buf[0] << 24 | wb_buf[1] << 16 |
+				wb_buf[2] << 8 | wb_buf[3];
+			if (res) {
+				hba->dev_info.wb_config_lun = true;
+				break;
+			}
+		}
+	}
+
+skip_unit_desc:
 	/* Zero-pad entire buffer for string termination. */
 	memset(desc_buf, 0, buff_len);
 
@@ -9894,8 +9958,7 @@ static inline int ufshcd_config_vreg_lpm(struct ufs_hba *hba,
 	else if (vreg->unused)
 		return 0;
 	else
-		return ufshcd_config_vreg_load(hba->dev, vreg,
-					       UFS_VREG_LPM_LOAD_UA);
+		return ufshcd_config_vreg_load(hba->dev, vreg, vreg->min_uA);
 }
 
 static inline int ufshcd_config_vreg_hpm(struct ufs_hba *hba,
@@ -10264,7 +10327,8 @@ static int ufshcd_init_clocks(struct ufs_hba *hba)
 		goto out;
 
 	list_for_each_entry(clki, head, list) {
-		if (!clki->name)
+		if ((!clki->name) ||
+		   (!strcmp(clki->name, "core_clk_ice_hw_ctl")))
 			continue;
 
 		clki->clk = devm_clk_get(dev, clki->name);
@@ -10947,10 +11011,21 @@ static int ufshcd_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	ufshcd_wb_buf_flush_disable(hba);
 	if (!ufshcd_is_ufs_dev_active(hba)) {
 		ret = ufshcd_set_dev_pwr_mode(hba, UFS_ACTIVE_PWR_MODE);
-		if (ret)
-			goto set_old_link_state;
+		if (ret) {
+			/*
+			 * In the case of SSU timeout, err_handler must have
+			 * recovered the uic link and dev state to active so
+			 * we can proceed after checking the link and
+			 * dev state.
+			 */
+			if ((host_byte(ret) == DID_TIME_OUT) &&
+			    ufshcd_is_ufs_dev_active(hba) &&
+			    ufshcd_is_link_active(hba))
+				ret = 0;
+			else
+				goto set_old_link_state;
+		}
 	}
-
 	if (ufshcd_keep_autobkops_enabled_except_suspend(hba))
 		ufshcd_enable_auto_bkops(hba);
 	else
@@ -11421,6 +11496,18 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	init_waitqueue_head(&hba->tm_tag_wq);
 
 	/* Initialize work queues */
+	snprintf(recovery_wq_name, ARRAY_SIZE(recovery_wq_name), "%s_%d",
+				"ufs_recovery_wq", host->host_no);
+	hba->recovery_wq = alloc_workqueue("%s",
+			WQ_MEM_RECLAIM|WQ_UNBOUND|WQ_HIGHPRI, 0,
+			recovery_wq_name);
+	if (!hba->recovery_wq) {
+		dev_err(hba->dev, "%s: failed to create the workqueue\n",
+				__func__);
+		err = -ENOMEM;
+		goto out_disable;
+	}
+
 	INIT_WORK(&hba->eh_work, ufshcd_err_handler);
 	INIT_WORK(&hba->eeh_work, ufshcd_exception_event_handler);
 	INIT_DELAYED_WORK(&hba->card_detect_work, ufshcd_card_detect_handler);

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -225,6 +225,8 @@
 
 #define HDLC_CTXT 1
 #define NON_HDLC_CTXT 2
+
+#define PKT_PROCESS_TIMEOUT		200
 
 #define TYPE_DATA		0
 #define TYPE_CNTL		1
@@ -796,6 +798,7 @@ struct diagchar_dev {
 	struct mutex diag_id_mutex;
 	struct mutex diagid_v2_mutex;
 	struct mutex cmd_reg_mutex;
+	spinlock_t dci_mempool_lock;
 	uint32_t cmd_reg_count;
 	struct mutex diagfwd_channel_mutex[NUM_PERIPHERALS];
 	/* Sizes that reflect memory pool sizes */

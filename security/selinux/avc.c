@@ -701,8 +701,8 @@ static struct avc_node *avc_insert(struct selinux_avc *avc,
 	node = avc_alloc_node(avc);
 	if (!node)
 		return NULL;
-	avc_node_populate(node, ssid, tsid, tclass, avd);
 
+	avc_node_populate(node, ssid, tsid, tclass, avd);
 	if (avc_xperms_populate(node, xp_node)) {
 		avc_node_kill(avc, node);
 		return NULL;
@@ -714,8 +714,8 @@ static struct avc_node *avc_insert(struct selinux_avc *avc,
 	spin_lock_irqsave(lock, flag);
 	hlist_for_each_entry(pos, head, list) {
 		if (pos->ae.ssid == ssid &&
-			pos->ae.tsid == tsid &&
-			pos->ae.tclass == tclass) {
+		    pos->ae.tsid == tsid &&
+		    pos->ae.tclass == tclass) {
 			avc_node_replace(avc, node, pos);
 			goto found;
 		}

@@ -1902,7 +1902,11 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		f = cdev->config->interface[intf];
 		if (!f)
 			break;
-		status = f->get_status ? f->get_status(f) : 0;
+
+		if (USB_CONFIG_ATT_WAKEUP & cdev->config->bmAttributes)
+			status = f->get_status ? f->get_status(f) : 0;
+		else
+			status = 0;
 		if (status < 0)
 			break;
 		put_unaligned_le16(status & 0x0000ffff, req->buf);
@@ -2109,6 +2113,12 @@ void composite_disconnect(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	unsigned long			flags;
+
+	if (cdev == NULL) {
+		WARN(1, "%s: Calling disconnect on a Gadget that is \
+			 not connected\n", __func__);
+		return;
+	}
 
 	/* REVISIT:  should we have config and device level
 	 * disconnect callbacks?

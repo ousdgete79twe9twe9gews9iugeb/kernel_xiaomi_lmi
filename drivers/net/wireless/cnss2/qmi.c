@@ -14,7 +14,6 @@
 
 #define WLFW_SERVICE_INS_ID_V01		1
 #define WLFW_CLIENT_ID			0x4b4e454c
-#define MAX_BDF_FILE_NAME		14
 #define BDF_FILE_NAME_PREFIX		"bdwlan"
 #define ELF_BDF_FILE_NAME		"bdwlan.elf"
 
@@ -41,8 +40,8 @@
 
 #define QMI_WLFW_MAX_RECV_BUF_SIZE	SZ_8K
 
-#define QMI_WLFW_MAC_READY_TIMEOUT_MS 50
-#define QMI_WLFW_MAC_READY_MAX_RETRY 200
+#define QMI_WLFW_MAC_READY_TIMEOUT_MS	50
+#define QMI_WLFW_MAC_READY_MAX_RETRY	200
 
 static char *cnss_qmi_mode_to_str(enum cnss_driver_mode mode)
 {
@@ -170,6 +169,8 @@ static int cnss_wlfw_host_cap_send_sync(struct cnss_plat_data *plat_priv)
 	struct wlfw_host_cap_resp_msg_v01 *resp;
 	struct qmi_txn txn;
 	int ret = 0;
+	u64 iova_start = 0, iova_size = 0,
+	    iova_ipa_start = 0, iova_ipa_size = 0;
 
 	cnss_pr_dbg("Sending host capability message, state: 0x%lx\n",
 		    plat_priv->driver_state);
@@ -210,6 +211,16 @@ static int cnss_wlfw_host_cap_send_sync(struct cnss_plat_data *plat_priv)
 	req->cal_done_valid = 1;
 	req->cal_done = plat_priv->cal_done;
 	cnss_pr_dbg("Calibration done is %d\n", plat_priv->cal_done);
+
+	if (!cnss_bus_get_iova(plat_priv, &iova_start, &iova_size) &&
+	    !cnss_bus_get_iova_ipa(plat_priv, &iova_ipa_start,
+				   &iova_ipa_size)) {
+		req->ddr_range_valid = 1;
+		req->ddr_range[0].start = iova_start;
+		req->ddr_range[0].size = iova_size + iova_ipa_size;
+		cnss_pr_dbg("Sending iova starting 0x%llx with size 0x%llx\n",
+			    req->ddr_range[0].start, req->ddr_range[0].size);
+	}
 
 	ret = qmi_txn_init(&plat_priv->qmi_wlfw, &txn,
 			   wlfw_host_cap_resp_msg_v01_ei, resp);
@@ -460,6 +471,7 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 				  u32 bdf_type, char *filename,
 				  u32 filename_len)
 {
+	char filename_tmp[MAX_FIRMWARE_NAME_LEN];
 	int ret = 0;
 	int hw_platform_ver = -1;
 	uint32_t hw_country_ver = 0;
@@ -469,65 +481,38 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 
 	switch (bdf_type) {
 	case CNSS_BDF_ELF:
-		if (plat_priv->board_info.board_id == 0xFF) {
-			if (hw_platform_ver == HARDWARE_PLATFORM_LMI) {
-				if (get_hw_country_version() == (uint32_t)CountryGlobal)
-				    snprintf(filename, filename_len, ELF_BDF_FILE_NAME_J11_GLOBAL);
-				else if (get_hw_country_version() == (uint32_t)CountryIndia)
-				    snprintf(filename, filename_len, ELF_BDF_FILE_NAME_J11_INDIA);
-				else {
-					if ((get_hw_version_minor() == (uint32_t)HW_MINOR_VERSION_B) && (get_hw_version_major() == (uint32_t)HW_MAJOR_VERSION_B))
-						snprintf(filename, filename_len, ELF_BDF_FILE_NAME_J11_B_BOM);
-					else
-						snprintf(filename, filename_len, ELF_BDF_FILE_NAME_J11);
-				}
-			}
-			else {
-				if (hw_country_ver == (uint32_t)CountryGlobal)
-					snprintf(filename, filename_len, ELF_BDF_FILE_NAME_GLOBAL);
-				else if (hw_country_ver == (uint32_t)CountryIndia)
-					snprintf(filename, filename_len, ELF_BDF_FILE_NAME_INDIA);
-				else {
-					if ((get_hw_version_minor() == (uint32_t)HW_MINOR_VERSION_B) && (get_hw_version_major() == (uint32_t)HW_MAJOR_VERSION_B))
-						snprintf(filename, filename_len, ELF_BDF_FILE_NAME_B_BOM);
-					else
-						snprintf(filename, filename_len, ELF_BDF_FILE_NAME);
-				}
-			}
-		}
+		if (plat_priv->board_info.board_id == 0xFF)
+			snprintf(filename_tmp, filename_len, ELF_BDF_FILE_NAME);
 		else if (plat_priv->board_info.board_id < 0xFF)
-			snprintf(filename, filename_len,
+			snprintf(filename_tmp, filename_len,
 				 ELF_BDF_FILE_NAME_PREFIX "%02x",
 				 plat_priv->board_info.board_id);
 		else
-			snprintf(filename, filename_len,
+			snprintf(filename_tmp, filename_len,
 				 BDF_FILE_NAME_PREFIX "%02x.e%02x",
 				 plat_priv->board_info.board_id >> 8 & 0xFF,
 				 plat_priv->board_info.board_id & 0xFF);
 		break;
 	case CNSS_BDF_BIN:
 		if (plat_priv->board_info.board_id == 0xFF)
-			snprintf(filename, filename_len, BIN_BDF_FILE_NAME);
+			snprintf(filename_tmp, filename_len, BIN_BDF_FILE_NAME);
 		else if (plat_priv->board_info.board_id < 0xFF)
-			snprintf(filename, filename_len,
+			snprintf(filename_tmp, filename_len,
 				 BIN_BDF_FILE_NAME_PREFIX "%02x",
 				 plat_priv->board_info.board_id);
 		else
-			snprintf(filename, filename_len,
+			snprintf(filename_tmp, filename_len,
 				 BDF_FILE_NAME_PREFIX "%02x.b%02x",
 				 plat_priv->board_info.board_id >> 8 & 0xFF,
 				 plat_priv->board_info.board_id & 0xFF);
 		break;
 	case CNSS_BDF_REGDB:
-		if (hw_platform_ver == HARDWARE_PLATFORM_LMI)
-			snprintf(filename, filename_len, REGDB_FILE_NAME_J11);
-		else
-			snprintf(filename, filename_len, REGDB_FILE_NAME);
+		snprintf(filename_tmp, filename_len, REGDB_FILE_NAME);
 		break;
 	case CNSS_BDF_DUMMY:
 		cnss_pr_dbg("CNSS_BDF_DUMMY is set, sending dummy BDF\n");
-		snprintf(filename, filename_len, DUMMY_BDF_FILE_NAME);
-		ret = MAX_BDF_FILE_NAME;
+		snprintf(filename_tmp, filename_len, DUMMY_BDF_FILE_NAME);
+		ret = MAX_FIRMWARE_NAME_LEN;
 		break;
 	default:
 		cnss_pr_err("Invalid BDF type: %d\n",
@@ -535,6 +520,10 @@ static int cnss_get_bdf_file_name(struct cnss_plat_data *plat_priv,
 		ret = -EINVAL;
 		break;
 	}
+
+	if (ret >= 0)
+		cnss_bus_add_fw_prefix_name(plat_priv, filename, filename_tmp);
+
 	return ret;
 }
 
@@ -544,7 +533,7 @@ int cnss_wlfw_bdf_dnld_send_sync(struct cnss_plat_data *plat_priv,
 	struct wlfw_bdf_download_req_msg_v01 *req;
 	struct wlfw_bdf_download_resp_msg_v01 *resp;
 	struct qmi_txn txn;
-	char filename[MAX_BDF_FILE_NAME];
+	char filename[MAX_FIRMWARE_NAME_LEN];
 	const struct firmware *fw_entry = NULL;
 	const u8 *temp;
 	unsigned int remaining;
@@ -567,7 +556,7 @@ int cnss_wlfw_bdf_dnld_send_sync(struct cnss_plat_data *plat_priv,
 				     filename, sizeof(filename));
 	if (ret > 0) {
 		temp = DUMMY_BDF_FILE_NAME;
-		remaining = MAX_BDF_FILE_NAME;
+		remaining = MAX_FIRMWARE_NAME_LEN;
 		goto bypass_bdf;
 	} else if (ret < 0) {
 		goto err_req_fw;
@@ -644,6 +633,9 @@ bypass_bdf:
 		temp += req->data_len;
 		req->seg_id++;
 	}
+
+	if (bdf_type != CNSS_BDF_DUMMY)
+		release_firmware(fw_entry);
 
 	kfree(req);
 	kfree(resp);
@@ -823,10 +815,6 @@ static int cnss_wlfw_wlan_mac_req_send_sync(struct cnss_plat_data *plat_priv,
 	}
 
 	cnss_pr_dbg("WLAN mac req completed\n");
-
-	kfree(req);
-	kfree(resp);
-	return 0;
 
 out:
 	kfree(req);
@@ -2125,6 +2113,12 @@ int cnss_wlfw_server_arrive(struct cnss_plat_data *plat_priv, void *data)
 
 	if (!plat_priv)
 		return -ENODEV;
+
+	if (test_bit(CNSS_QMI_WLFW_CONNECTED, &plat_priv->driver_state)) {
+		cnss_pr_err("Unexpected WLFW server arrive\n");
+		CNSS_ASSERT(0);
+		return -EINVAL;
+	}
 
 	ret = cnss_wlfw_connect_to_server(plat_priv, data);
 	if (ret < 0)

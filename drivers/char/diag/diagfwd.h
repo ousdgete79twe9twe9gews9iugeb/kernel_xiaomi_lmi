@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -45,4 +45,6 @@ void diag_update_pkt_buffer(unsigned char *buf, uint32_t len, int type);
 int diag_process_stm_cmd(unsigned char *buf, unsigned char *dest_buf);
 void diag_md_hdlc_reset_timer_func(struct timer_list *tlist);
 void diag_update_md_clients(unsigned int type);
+void diag_process_stm_mask(uint8_t cmd, uint8_t data_mask,
+	int data_type);
 #endif

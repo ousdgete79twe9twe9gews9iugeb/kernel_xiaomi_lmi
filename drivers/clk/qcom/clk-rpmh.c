@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/clk-provider.h>
@@ -282,6 +282,7 @@ static const struct clk_rpmh_desc clk_rpmh_kona = {
 };
 
 DEFINE_CLK_RPMH_ARC(lito, bi_tcxo, bi_tcxo_ao, "xo.lvl", 0x3, 2);
+DEFINE_CLK_RPMH_VRM(lito, ln_bb_clk2, ln_bb_clk2_ao, "lnbclka2", 2);
 DEFINE_CLK_RPMH_VRM(lito, ln_bb_clk3, ln_bb_clk3_ao, "lnbclka3", 2);
 DEFINE_CLK_RPMH_VRM(lito, rf_clk1, rf_clk1_ao, "rfclkd1", 1);
 DEFINE_CLK_RPMH_VRM(lito, rf_clk2, rf_clk2_ao, "rfclkd2", 1);
@@ -291,6 +292,8 @@ DEFINE_CLK_RPMH_VRM(lito, rf_clk4, rf_clk4_ao, "rfclkd4", 1);
 static struct clk_hw *lito_rpmh_clocks[] = {
 	[RPMH_CXO_CLK]		= &lito_bi_tcxo.hw,
 	[RPMH_CXO_CLK_A]	= &lito_bi_tcxo_ao.hw,
+	[RPMH_LN_BB_CLK2]	= &lito_ln_bb_clk2.hw,
+	[RPMH_LN_BB_CLK2_A]	= &lito_ln_bb_clk2_ao.hw,
 	[RPMH_LN_BB_CLK3]	= &lito_ln_bb_clk3.hw,
 	[RPMH_LN_BB_CLK3_A]	= &lito_ln_bb_clk3_ao.hw,
 	[RPMH_RF_CLK1]		= &lito_rf_clk1.hw,
@@ -306,6 +309,27 @@ static struct clk_hw *lito_rpmh_clocks[] = {
 static const struct clk_rpmh_desc clk_rpmh_lito = {
 	.clks = lito_rpmh_clocks,
 	.num_clks = ARRAY_SIZE(lito_rpmh_clocks),
+};
+
+DEFINE_CLK_RPMH_ARC(lagoon, bi_tcxo, bi_tcxo_ao, "xo.lvl", 0x3, 4);
+DEFINE_CLK_RPMH_ARC(lagoon, qlink, qlink_ao, "qphy.lvl", 0x1, 4);
+DEFINE_CLK_RPMH_VRM(lagoon, ln_bb_clk2, ln_bb_clk2_ao, "lnbclkg2", 4);
+DEFINE_CLK_RPMH_VRM(lagoon, ln_bb_clk3, ln_bb_clk3_ao, "lnbclkg3", 4);
+
+static struct clk_hw *lagoon_rpmh_clocks[] = {
+	[RPMH_CXO_CLK]		= &lagoon_bi_tcxo.hw,
+	[RPMH_CXO_CLK_A]	= &lagoon_bi_tcxo_ao.hw,
+	[RPMH_LN_BB_CLK2]	= &lagoon_ln_bb_clk2.hw,
+	[RPMH_LN_BB_CLK2_A]	= &lagoon_ln_bb_clk2_ao.hw,
+	[RPMH_LN_BB_CLK3]	= &lagoon_ln_bb_clk3.hw,
+	[RPMH_LN_BB_CLK3_A]	= &lagoon_ln_bb_clk3_ao.hw,
+	[RPMH_QLINK_CLK]	= &lagoon_qlink.hw,
+	[RPMH_QLINK_CLK_A]	= &lagoon_qlink_ao.hw,
+};
+
+static const struct clk_rpmh_desc clk_rpmh_lagoon = {
+	.clks = lagoon_rpmh_clocks,
+	.num_clks = ARRAY_SIZE(lagoon_rpmh_clocks),
 };
 
 static struct clk_hw *of_clk_rpmh_hw_get(struct of_phandle_args *clkspec,
@@ -386,6 +410,7 @@ static const struct of_device_id clk_rpmh_match_table[] = {
 	{ .compatible = "qcom,sdm845-rpmh-clk", .data = &clk_rpmh_sdm845},
 	{ .compatible = "qcom,kona-rpmh-clk", .data = &clk_rpmh_kona},
 	{ .compatible = "qcom,lito-rpmh-clk", .data = &clk_rpmh_lito},
+	{ .compatible = "qcom,lagoon-rpmh-clk", .data = &clk_rpmh_lagoon},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, clk_rpmh_match_table);

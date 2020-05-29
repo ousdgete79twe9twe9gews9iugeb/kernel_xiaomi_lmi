@@ -68,6 +68,7 @@
 #include "io-pgtable.h"
 #include "arm-smmu-regs.h"
 #include "arm-smmu-debug.h"
+#include "iommu-logger.h"
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
 
@@ -87,7 +88,7 @@
 #define ARM_MMU500_ACR_SMTNMB_TLBEN	(1 << 8)
 
 #define TLB_LOOP_TIMEOUT		500000	/* 500ms */
-#define TLB_SPIN_COUNT			10
+#define TLB_LOOP_INC_MAX		1000      /*1ms*/
 
 #define ARM_SMMU_IMPL_DEF0(smmu) \
 	((smmu)->base + (2 * (1 << (smmu)->pgshift)))
@@ -394,6 +395,7 @@ struct arm_smmu_domain {
 	struct list_head		secure_pool_list;
 	/* nonsecure pool protected by pgtbl_lock */
 	struct list_head		nonsecure_pool;
+	struct iommu_debug_attachment	*logger;
 	struct iommu_domain		domain;
 };
 
@@ -1184,28 +1186,121 @@ static void arm_smmu_testbus_dump(struct arm_smmu_device *smmu, u16 sid)
 							data->tcu_base,
 							tbu_testbus_sel,
 							data->testbus_version);
-
-		arm_smmu_debug_dump_tcu_testbus(smmu->dev, ARM_SMMU_GR0(smmu),
-						data->tcu_base,
-						tcu_testbus_sel);
+		else
+			arm_smmu_debug_dump_tcu_testbus(smmu->dev,
+							ARM_SMMU_GR0(smmu),
+							data->tcu_base,
+							tcu_testbus_sel);
 		spin_unlock(&testbus_lock);
+	}
+}
+
+static void __arm_smmu_tlb_sync_timeout_SMMUV2(struct arm_smmu_device *smmu)
+{
+
+	static DEFINE_RATELIMIT_STATE(_rs,
+				      DEFAULT_RATELIMIT_INTERVAL,
+				      DEFAULT_RATELIMIT_BURST);
+	if (__ratelimit(&_rs))
+		dev_err(smmu->dev,
+			"TLB sync timed out -- SMMUV2 may be deadlocked\n");
+}
+
+static void __arm_smmu_tlb_sync_timeout_SMMUV500(struct arm_smmu_device *smmu)
+{
+	u32 sync_inv_ack, tbu_pwr_status, sync_inv_progress;
+	u32 tbu_inv_pending = 0, tbu_sync_pending = 0;
+	u32 tbu_inv_acked = 0, tbu_sync_acked = 0;
+	u32 tcu_inv_pending = 0, tcu_sync_pending = 0;
+	u32 tbu_ids = 0;
+	phys_addr_t base_phys = smmu->phys_addr;
+
+
+	static DEFINE_RATELIMIT_STATE(_rs,
+				      DEFAULT_RATELIMIT_INTERVAL,
+				      DEFAULT_RATELIMIT_BURST);
+
+	sync_inv_ack = scm_io_read(base_phys + ARM_SMMU_STATS_SYNC_INV_TBU_ACK);
+	tbu_pwr_status = scm_io_read(base_phys + ARM_SMMU_TBU_PWR_STATUS);
+	sync_inv_progress = scm_io_read(base_phys +
+					ARM_SMMU_MMU2QSS_AND_SAFE_WAIT_CNTR);
+
+	if (sync_inv_ack) {
+		tbu_inv_pending = (sync_inv_ack >> TBU_INV_REQ_SHIFT) &
+			TBU_INV_REQ_MASK;
+		tbu_inv_acked = (sync_inv_ack >> TBU_INV_ACK_SHIFT) &
+			TBU_INV_ACK_MASK;
+		tbu_sync_pending = (sync_inv_ack >> TBU_SYNC_REQ_SHIFT) &
+			TBU_SYNC_REQ_MASK;
+		tbu_sync_acked = (sync_inv_ack >> TBU_SYNC_ACK_SHIFT) &
+			TBU_SYNC_ACK_MASK;
+	}
+
+	if (tbu_pwr_status) {
+		if (tbu_sync_pending)
+			tbu_ids = tbu_pwr_status & ~tbu_sync_acked;
+		else if (tbu_inv_pending)
+			tbu_ids = tbu_pwr_status & ~tbu_inv_acked;
+	}
+
+	tcu_inv_pending = (sync_inv_progress >> TCU_INV_IN_PRGSS_SHIFT) &
+		TCU_INV_IN_PRGSS_MASK;
+	tcu_sync_pending = (sync_inv_progress >> TCU_SYNC_IN_PRGSS_SHIFT) &
+		TCU_SYNC_IN_PRGSS_MASK;
+
+	if (__ratelimit(&_rs)) {
+		unsigned long tbu_id, tbus_t = tbu_ids;
+
+		dev_err(smmu->dev,
+			"TLB sync timed out -- SMMUV500 may be deadlocked\n"
+			"TBU ACK 0x%x TBU PWR 0x%x TCU sync_inv 0x%x\n",
+			sync_inv_ack, tbu_pwr_status, sync_inv_progress);
+		dev_err(smmu->dev,
+			"TCU invalidation %s, TCU sync %s\n",
+			tcu_inv_pending?"pending":"completed",
+			tcu_sync_pending?"pending":"completed");
+
+		dev_err(smmu->dev, "TBU PWR status 0x%x\n", tbu_pwr_status);
+
+		while (tbus_t) {
+			struct qsmmuv500_tbu_device *tbu;
+
+			tbu_id = __ffs(tbus_t);
+			tbus_t = tbus_t & ~(1 << tbu_id);
+			tbu = qsmmuv500_find_tbu(smmu,
+						 (u16)(tbu_id << TBUID_SHIFT));
+			if (tbu) {
+				dev_err(smmu->dev,
+					"TBU %s ack pending for TBU %s, %s\n",
+					tbu_sync_pending?"sync" : "inv",
+					dev_name(tbu->dev),
+					tbu_sync_pending ?
+					"check pending transactions on TBU"
+					: "check for TBU power status");
+				arm_smmu_testbus_dump(smmu,
+						(u16)(tbu_id << TBUID_SHIFT));
+			}
+		}
+
+		/*dump TCU testbus*/
+		arm_smmu_testbus_dump(smmu, U16_MAX);
 	}
 }
 /* Wait for any pending TLB invalidations to complete */
 static int __arm_smmu_tlb_sync(struct arm_smmu_device *smmu,
 			void __iomem *sync, void __iomem *status)
 {
-	unsigned int spin_cnt, delay;
-	u32 sync_inv_ack, tbu_pwr_status, sync_inv_progress;
+	unsigned int inc, delay;
 
 	writel_relaxed(QCOM_DUMMY_VAL, sync);
-	for (delay = 1; delay < TLB_LOOP_TIMEOUT; delay *= 2) {
-		for (spin_cnt = TLB_SPIN_COUNT; spin_cnt > 0; spin_cnt--) {
-			if (!(readl_relaxed(status) & sTLBGSTATUS_GSACTIVE))
-				return 0;
-			cpu_relax();
-		}
-		udelay(delay);
+	for (delay = 1, inc = 1; delay < TLB_LOOP_TIMEOUT; delay += inc) {
+		if (!(readl_relaxed(status) & sTLBGSTATUS_GSACTIVE))
+			return 0;
+
+		cpu_relax();
+		udelay(inc);
+		if (inc < TLB_LOOP_INC_MAX)
+			inc *= 2;
 	}
 	sync_inv_ack = scm_io_read((unsigned long)(smmu->phys_addr +
 				     ARM_SMMU_STATS_SYNC_INV_TBU_ACK));
@@ -1214,9 +1309,17 @@ static int __arm_smmu_tlb_sync(struct arm_smmu_device *smmu,
 	sync_inv_progress = scm_io_read((unsigned long)(smmu->phys_addr +
 					ARM_SMMU_MMU2QSS_AND_SAFE_WAIT_CNTR));
 	trace_tlbsync_timeout(smmu->dev, 0);
+
 	dev_err_ratelimited(smmu->dev,
 			    "TLB sync timed out -- SMMU may be deadlocked ack 0x%x pwr 0x%x sync and invalidation progress 0x%x\n",
 			    sync_inv_ack, tbu_pwr_status, sync_inv_progress);
+
+	if (smmu->model == QCOM_SMMUV500)
+		__arm_smmu_tlb_sync_timeout_SMMUV500(smmu);
+	else if (smmu->model == QCOM_SMMUV2)
+		__arm_smmu_tlb_sync_timeout_SMMUV2(smmu);
+
+	BUG_ON(IS_ENABLED(CONFIG_IOMMU_TLBSYNC_DEBUG));
 	return -EINVAL;
 }
 
@@ -1934,13 +2037,14 @@ static void arm_smmu_write_context_bank(struct arm_smmu_device *smmu, int idx,
 	} else
 		reg |= SCTLR_SHCFG_NSH << SCTLR_SHCFG_SHIFT;
 
-	if (attributes & (1 << DOMAIN_ATTR_CB_STALL_DISABLE)) {
-		reg &= ~SCTLR_CFCFG;
-		reg |= SCTLR_HUPCF;
-	}
-
-	if (attributes & (1 << DOMAIN_ATTR_NO_CFRE))
+	if (attributes & (1 << DOMAIN_ATTR_FAULT_MODEL_NO_CFRE))
 		reg &= ~SCTLR_CFRE;
+
+	if (attributes & (1 << DOMAIN_ATTR_FAULT_MODEL_NO_STALL))
+		reg &= ~SCTLR_CFCFG;
+
+	if (attributes & (1 << DOMAIN_ATTR_FAULT_MODEL_HUPCF))
+		reg |= SCTLR_HUPCF;
 
 	if ((!(attributes & (1 << DOMAIN_ATTR_S1_BYPASS)) &&
 	     !(attributes & (1 << DOMAIN_ATTR_EARLY_MAP))) || !stage1)
@@ -2007,9 +2111,16 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 	struct arm_smmu_cfg *cfg = &smmu_domain->cfg;
 	unsigned long quirks = 0;
 	bool dynamic;
+	struct iommu_group *group;
 
 	mutex_lock(&smmu_domain->init_mutex);
 	if (smmu_domain->smmu)
+		goto out_unlock;
+
+	group = iommu_group_get(dev);
+	ret = iommu_logger_register(&smmu_domain->logger, domain, group);
+	iommu_group_put(group);
+	if (ret)
 		goto out_unlock;
 
 	if (domain->type == IOMMU_DOMAIN_DMA) {
@@ -2017,7 +2128,7 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 		if (ret) {
 			dev_err(dev, "%s: default domain setup failed\n",
 				__func__);
-			goto out_unlock;
+			goto out_logger;
 		}
 	}
 
@@ -2075,7 +2186,7 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 
 	if (cfg->fmt == ARM_SMMU_CTX_FMT_NONE) {
 		ret = -EINVAL;
-		goto out_unlock;
+		goto out_logger;
 	}
 
 	switch (smmu_domain->stage) {
@@ -2123,7 +2234,7 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 		break;
 	default:
 		ret = -EINVAL;
-		goto out_unlock;
+		goto out_logger;
 	}
 
 	if (smmu_domain->attributes & (1 << DOMAIN_ATTR_FAST))
@@ -2145,7 +2256,7 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 
 	ret = arm_smmu_alloc_cb(domain, smmu, dev);
 	if (ret < 0)
-		goto out_unlock;
+		goto out_logger;
 
 	cfg->cbndx = ret;
 
@@ -2253,6 +2364,9 @@ static int arm_smmu_init_domain_context(struct iommu_domain *domain,
 out_clear_smmu:
 	arm_smmu_destroy_domain_context(domain);
 	smmu_domain->smmu = NULL;
+out_logger:
+	iommu_logger_unregister(smmu_domain->logger);
+	smmu_domain->logger = NULL;
 out_unlock:
 	mutex_unlock(&smmu_domain->init_mutex);
 	return ret;
@@ -2376,6 +2490,7 @@ static void arm_smmu_domain_free(struct iommu_domain *domain)
 	 */
 	arm_smmu_put_dma_cookie(domain);
 	arm_smmu_destroy_domain_context(domain);
+	iommu_logger_unregister(smmu_domain->logger);
 	kfree(smmu_domain);
 }
 
@@ -2883,15 +2998,19 @@ static int arm_smmu_setup_default_domain(struct device *dev,
 	if (of_property_match_string(np, "qcom,iommu-faults",
 				     "stall-disable") >= 0)
 		__arm_smmu_domain_set_attr(domain,
-			DOMAIN_ATTR_CB_STALL_DISABLE, &attr);
+			DOMAIN_ATTR_FAULT_MODEL_NO_STALL, &attr);
+
+	if (of_property_match_string(np, "qcom,iommu-faults", "no-CFRE") >= 0)
+		__arm_smmu_domain_set_attr(
+			domain, DOMAIN_ATTR_FAULT_MODEL_NO_CFRE, &attr);
+
+	if (of_property_match_string(np, "qcom,iommu-faults", "HUPCF") >= 0)
+		__arm_smmu_domain_set_attr(
+			domain, DOMAIN_ATTR_FAULT_MODEL_HUPCF, &attr);
 
 	if (of_property_match_string(np, "qcom,iommu-faults", "non-fatal") >= 0)
 		__arm_smmu_domain_set_attr(domain,
 			DOMAIN_ATTR_NON_FATAL_FAULTS, &attr);
-
-	if (of_property_match_string(np, "qcom,iommu-faults", "no-CFRE") >= 0)
-		__arm_smmu_domain_set_attr(
-			domain, DOMAIN_ATTR_NO_CFRE, &attr);
 
 	/* Default value: disabled */
 	ret = of_property_read_u32(np, "qcom,iommu-vmid", &val);
@@ -3184,8 +3303,13 @@ static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
 				  prot, &size);
 		spin_unlock_irqrestore(&smmu_domain->cb_lock, flags);
 
-
 		if (ret == -ENOMEM) {
+			/* unmap any partially mapped iova */
+			if (size) {
+				arm_smmu_secure_domain_unlock(smmu_domain);
+				arm_smmu_unmap(domain, iova, size);
+				arm_smmu_secure_domain_lock(smmu_domain);
+			}
 			arm_smmu_prealloc_memory(smmu_domain,
 						 batch_size, &nonsecure_pool);
 			spin_lock_irqsave(&smmu_domain->cb_lock, flags);
@@ -3200,8 +3324,8 @@ static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
 							 &nonsecure_pool);
 		}
 
-		/* Returns 0 on error */
-		if (!ret) {
+		/* Returns -ve val on error */
+		if (ret < 0) {
 			size_to_unmap = iova + size - __saved_iova_start;
 			goto out;
 		}
@@ -3209,16 +3333,17 @@ static size_t arm_smmu_map_sg(struct iommu_domain *domain, unsigned long iova,
 		iova += batch_size;
 		idx_start = idx_end;
 		sg_start = sg_end;
+		size = 0;
 	}
 
 out:
 	arm_smmu_assign_table(smmu_domain);
+	arm_smmu_secure_domain_unlock(smmu_domain);
 
 	if (size_to_unmap) {
 		arm_smmu_unmap(domain, __saved_iova_start, size_to_unmap);
 		iova = __saved_iova_start;
 	}
-	arm_smmu_secure_domain_unlock(smmu_domain);
 	return iova - __saved_iova_start;
 }
 
@@ -3683,14 +3808,10 @@ static int arm_smmu_domain_get_attr(struct iommu_domain *domain,
 			& (1 << DOMAIN_ATTR_PAGE_TABLE_FORCE_COHERENT));
 		ret = 0;
 		break;
-	case DOMAIN_ATTR_CB_STALL_DISABLE:
-		*((int *)data) = !!(smmu_domain->attributes
-			& (1 << DOMAIN_ATTR_CB_STALL_DISABLE));
-		ret = 0;
-		break;
-	case DOMAIN_ATTR_NO_CFRE:
-		*((int *)data) = !!(smmu_domain->attributes
-			& (1 << DOMAIN_ATTR_NO_CFRE));
+	case DOMAIN_ATTR_FAULT_MODEL_NO_CFRE:
+	case DOMAIN_ATTR_FAULT_MODEL_NO_STALL:
+	case DOMAIN_ATTR_FAULT_MODEL_HUPCF:
+		*((int *)data) = !!(smmu_domain->attributes & (1U << attr));
 		ret = 0;
 		break;
 	default:
@@ -3810,6 +3931,12 @@ static int __arm_smmu_domain_set_attr(struct iommu_domain *domain,
 		break;
 	}
 	case DOMAIN_ATTR_SECURE_VMID:
+		/* can't be changed while attached */
+		if (smmu_domain->smmu != NULL) {
+			ret = -EBUSY;
+			break;
+		}
+
 		if (smmu_domain->secure_vmid != VMID_INVAL) {
 			ret = -ENODEV;
 			WARN(1, "secure vmid already set!");
@@ -3823,6 +3950,12 @@ static int __arm_smmu_domain_set_attr(struct iommu_domain *domain,
 		 * force DOMAIN_ATTR_ATOMIC to bet set.
 		 */
 	case DOMAIN_ATTR_FAST:
+		/* can't be changed while attached */
+		if (smmu_domain->smmu != NULL) {
+			ret = -EBUSY;
+			break;
+		}
+
 		if (*((int *)data)) {
 			smmu_domain->attributes |= 1 << DOMAIN_ATTR_FAST;
 			smmu_domain->attributes |= 1 << DOMAIN_ATTR_ATOMIC;
@@ -3875,8 +4008,9 @@ static int __arm_smmu_domain_set_attr2(struct iommu_domain *domain,
 		break;
 	}
 	case DOMAIN_ATTR_BITMAP_IOVA_ALLOCATOR:
-	case DOMAIN_ATTR_CB_STALL_DISABLE:
-	case DOMAIN_ATTR_NO_CFRE:
+	case DOMAIN_ATTR_FAULT_MODEL_NO_CFRE:
+	case DOMAIN_ATTR_FAULT_MODEL_NO_STALL:
+	case DOMAIN_ATTR_FAULT_MODEL_HUPCF:
 		if (*((int *)data))
 			smmu_domain->attributes |=
 				1 << attr;

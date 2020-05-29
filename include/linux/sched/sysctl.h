@@ -48,7 +48,7 @@ extern unsigned int sysctl_sched_min_task_util_for_boost;
 extern unsigned int sysctl_sched_min_task_util_for_colocation;
 extern unsigned int sysctl_sched_asym_cap_sibling_freq_match_pct;
 extern unsigned int sysctl_sched_coloc_downmigrate_ns;
-extern unsigned int sysctl_sched_task_unfilter_nr_windows;
+extern unsigned int sysctl_sched_task_unfilter_period;
 extern unsigned int sysctl_sched_busy_hyst_enable_cpus;
 extern unsigned int sysctl_sched_busy_hyst;
 extern unsigned int sysctl_sched_coloc_busy_hyst_enable_cpus;
@@ -56,6 +56,8 @@ extern unsigned int sysctl_sched_coloc_busy_hyst;
 extern unsigned int sysctl_sched_coloc_busy_hyst_max_ms;
 extern unsigned int sysctl_sched_window_stats_policy;
 extern unsigned int sysctl_sched_ravg_window_nr_ticks;
+extern unsigned int sysctl_sched_dynamic_ravg_window_enable;
+extern unsigned int sysctl_sched_prefer_spread;
 
 extern int
 walt_proc_group_thresholds_handler(struct ctl_table *table, int write,
@@ -73,7 +75,7 @@ sched_ravg_window_handler(struct ctl_table *table, int write,
 
 #endif
 
-#if defined(CONFIG_PREEMPT_TRACER) || defined(CONFIG_DEBUG_PREEMPT)
+#if defined(CONFIG_PREEMPTIRQ_EVENTS) || defined(CONFIG_PREEMPT_TRACER)
 extern unsigned int sysctl_preemptoff_tracing_threshold_ns;
 #endif
 #if defined(CONFIG_PREEMPTIRQ_EVENTS) && defined(CONFIG_IRQSOFF_TRACER)

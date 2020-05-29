@@ -12,3 +12,4 @@ obj-$(CONFIG_IDT_P9415)			+= idtp9415.o
 obj-$(CONFIG_RX1619_TRIM)	+= rx1619_trim.o
 obj-$(CONFIG_RX1619)		+= rx1619.o
 obj-$(CONFIG_LN8282)			+= ln8282.o
+obj-$(CONFIG_SMB1398_CHARGER)		+= smb1398-charger.o pmic-voter.o

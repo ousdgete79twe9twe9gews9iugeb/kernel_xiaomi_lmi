@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -617,6 +617,9 @@ static int spcom_local_powerup(const struct subsys_desc *subsys)
 			spcom_sp2soc_pbldone_mask|spcom_sp2soc_initdone_mask,
 			regs);
 		iounmap(regs);
+	} else {
+		pr_err("PBL has returned an error= 0x%x. Not sending sw_init_done\n",
+			pbl_status_reg);
 	}
 
 	iounmap(err_regs);
@@ -1258,6 +1261,13 @@ static int spcom_handle_write(struct spcom_channel *ch,
 		return -EINVAL;
 	}
 
+	if (cmd_id == SPCOM_CMD_SEND || cmd_id == SPCOM_CMD_SEND_MODIFIED) {
+		if (!spcom_is_channel_connected(ch)) {
+			pr_err("ch [%s] remote side not connected\n", ch->name);
+			return -ENOTCONN;
+		}
+	}
+
 	switch (cmd_id) {
 	case SPCOM_CMD_SEND:
 		if (ch->is_sharable) {
@@ -1715,12 +1725,6 @@ static ssize_t spcom_device_write(struct file *filp,
 			return -EINVAL;
 		}
 		pr_debug("control device - no channel context\n");
-	} else {
-		/* Check if remote side connect */
-		if (!spcom_is_channel_connected(ch)) {
-			pr_err("ch [%s] remote side not connect\n", ch->name);
-			return -ENOTCONN;
-		}
 	}
 	buf_size = size; /* explicit casting size_t to int */
 	buf = kzalloc(size, GFP_KERNEL);

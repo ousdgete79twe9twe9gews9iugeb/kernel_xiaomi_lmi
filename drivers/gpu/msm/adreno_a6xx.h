@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2020 XiaoMi, Inc.
  */
 
@@ -43,8 +43,6 @@ struct adreno_a6xx_core {
 	u32 gmu_minor;
 	/** @prim_fifo_threshold: target specific value for PC_DBG_ECO_CNTL */
 	unsigned int prim_fifo_threshold;
-	/** @pdc_address_offset: Offset for the PDC region for the target */
-	unsigned int pdc_address_offset;
 	/** @sqefw_name: Name of the SQE microcode file */
 	const char *sqefw_name;
 	/** @gmufw_name: Name of the GMU firmware file */
@@ -150,8 +148,6 @@ struct cpu_gpu_lock {
 };
 
 #define A6XX_CP_CTXRECORD_MAGIC_REF     0xAE399D6EUL
-/* Size of each CP preemption record */
-#define A6XX_CP_CTXRECORD_SIZE_IN_BYTES     (2112 * 1024)
 /* Size of the user context record block (in bytes) */
 #define A6XX_CP_CTXRECORD_USER_RESTORE_SIZE (192 * 1024)
 /* Size of the performance counter save/restore block (in bytes) */

@@ -46,7 +46,7 @@ static const char * const power_supply_type_text[] = {
 	"Unknown", "Battery", "UPS", "Mains", "USB",
 	"USB_DCP", "USB_CDP", "USB_ACA", "USB_C",
 	"USB_PD", "USB_PD_DRP", "BrickID",
-	"USB_HVDCP", "USB_HVDCP_3", "Wireless", "USB_FLOAT",
+	"USB_HVDCP", "USB_HVDCP_3", "USB_HVDCP_3P5", "Wireless", "USB_FLOAT",
 	"BMS", "Parallel", "Main", "USB_C_UFP", "USB_C_DFP",
 	"Charge_Pump","Batt_Verify"
 };
@@ -576,6 +576,8 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(skin_health),
 	POWER_SUPPLY_ATTR(aicl_done),
 	POWER_SUPPLY_ATTR(voltage_step),
+	POWER_SUPPLY_ATTR(apsd_rerun),
+	POWER_SUPPLY_ATTR(apsd_timeout),
 	/* Charge pump properties */
 	POWER_SUPPLY_ATTR(cp_status1),
 	POWER_SUPPLY_ATTR(cp_status2),
@@ -641,6 +643,7 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(reset_div_2_mode),
 	POWER_SUPPLY_ATTR(aicl_enable),
 	POWER_SUPPLY_ATTR(otg_state),
+	POWER_SUPPLY_ATTR(charger_status),
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */
