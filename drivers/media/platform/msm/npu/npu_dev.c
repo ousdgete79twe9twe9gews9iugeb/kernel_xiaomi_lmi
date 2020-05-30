@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2020 XiaoMi, Inc.
  */
 
 /* -------------------------------------------------------------------------
@@ -1762,9 +1763,8 @@ static int npu_parse_dt_clock(struct npu_device *npu_dev)
 			sizeof(core_clks[i].clk_name));
 		core_clks[i].clk = devm_clk_get(&pdev->dev, clock_name);
 		if (IS_ERR(core_clks[i].clk)) {
-			if (PTR_ERR(core_clks[i].clk) != -EPROBE_DEFER)
-				NPU_ERR("unable to get clk: %s\n", clock_name);
-			rc = PTR_ERR(core_clks[i].clk);
+			NPU_ERR("unable to get clk: %s\n", clock_name);
+			rc = -EINVAL;
 			break;
 		}
 
@@ -1825,15 +1825,25 @@ regulator_err:
 
 static int npu_parse_dt_bw(struct npu_device *npu_dev)
 {
+<<<<<<< HEAD
 	int ret, len, num_paths, i;
 	uint32_t ports[MAX_PATHS * 2];
+=======
+    int ret, len, num_paths, i;
+    uint32_t ports[MAX_PATHS * 2];
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 	struct platform_device *pdev = npu_dev->pdev;
 	struct npu_bwctrl *bwctrl = &npu_dev->bwctrl;
 
 	if (of_find_property(pdev->dev.of_node, "qcom,src-dst-ports", &len)) {
 		len /= sizeof(ports[0]);
+<<<<<<< HEAD
 		if (len % 2 || len > ARRAY_SIZE(ports)) {
 			NPU_ERR("Unexpected number of ports %d\n", len);
+=======
+        if (len % 2 || len > ARRAY_SIZE(ports)) {
+            NPU_ERR("Unexpected number of ports %d\n", len);
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 			return -EINVAL;
 		}
 
@@ -1857,10 +1867,17 @@ static int npu_parse_dt_bw(struct npu_device *npu_dev)
 	bwctrl->bw_data.active_only = false;
 
 	for (i = 0; i < num_paths; i++) {
+<<<<<<< HEAD
 		bwctrl->bw_levels[0].vectors[i].src = ports[2 * i];
 		bwctrl->bw_levels[0].vectors[i].dst = ports[2 * i + 1];
 		bwctrl->bw_levels[1].vectors[i].src = ports[2 * i];
 		bwctrl->bw_levels[1].vectors[i].dst = ports[2 * i + 1];
+=======
+			bwctrl->bw_levels[0].vectors[i].src = ports[2 * i];
+			bwctrl->bw_levels[0].vectors[i].dst = ports[2 * i + 1];
+			bwctrl->bw_levels[1].vectors[i].src = ports[2 * i];
+			bwctrl->bw_levels[1].vectors[i].dst = ports[2 * i + 1];
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 	}
 	bwctrl->bw_levels[0].num_paths = num_paths;
 	bwctrl->bw_levels[1].num_paths = num_paths;
@@ -1879,7 +1896,11 @@ static int npu_parse_dt_bw(struct npu_device *npu_dev)
 
 int npu_set_bw(struct npu_device *npu_dev, int new_ib, int new_ab)
 {
+<<<<<<< HEAD
 	int i, j, ret;
+=======
+	int i,j,ret;
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 	struct npu_bwctrl *bwctrl = &npu_dev->bwctrl;
 
 	if (!bwctrl->bus_client) {
@@ -1894,13 +1915,21 @@ int npu_set_bw(struct npu_device *npu_dev, int new_ib, int new_ab)
 
 	for (j = 0; j < bwctrl->num_paths; j++) {
 		if ((bwctrl->bw_levels[i].vectors[j].dst ==
+<<<<<<< HEAD
 			MSM_BUS_SLAVE_CLK_CTL) && (new_ib > 0)) {
+=======
+					MSM_BUS_SLAVE_CLK_CTL) && (new_ib > 0)) {
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 			bwctrl->bw_levels[i].vectors[j].ib = 1;
 			bwctrl->bw_levels[i].vectors[j].ab = 1;
 		} else {
 			bwctrl->bw_levels[i].vectors[j].ib = new_ib * MBYTE;
 			bwctrl->bw_levels[i].vectors[j].ab =
+<<<<<<< HEAD
 				new_ab * MBYTE / bwctrl->num_paths;
+=======
+			new_ab * MBYTE / bwctrl->num_paths;
+>>>>>>> f7f0913d8124... drivers: media: Import Xiaomi OSS Changes from https://github.com/MiCode/Xiaomi_Kernel_OpenSource/commit/789514465a7cd3acbf70fa67f7e10fd8fde270bd
 		}
 	}
 
