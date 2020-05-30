@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved. */
+/* Copyright (C) 2020 XiaoMi, Inc. */
 
 #include <linux/debugfs.h>
 #include <linux/delay.h>
@@ -528,6 +529,9 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
 	/* setup support for additional features */
 	mhi_init_sfr(mhi_cntrl);
 
+	/* setup support for time sync */
+	mhi_init_timesync(mhi_cntrl);
+
 	if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
 		mhi_timesync_log(mhi_cntrl);
 
@@ -561,7 +565,6 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 	struct mhi_cmd_ctxt *cmd_ctxt;
 	struct mhi_cmd *mhi_cmd;
 	struct mhi_event_ctxt *er_ctxt;
-	struct mhi_sfr_info *sfr_info = mhi_cntrl->mhi_sfr;
 	int ret, i;
 
 	MHI_CNTRL_LOG(
@@ -655,11 +658,7 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 	wake_up_all(&mhi_cntrl->state_event);
 	flush_work(&mhi_cntrl->special_work);
 
-	if (sfr_info && sfr_info->buf_addr) {
-		mhi_free_coherent(mhi_cntrl, sfr_info->len, sfr_info->buf_addr,
-				  sfr_info->dma_addr);
-		sfr_info->buf_addr = NULL;
-	}
+	mhi_cntrl->force_m3_done = false;
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
@@ -1009,7 +1008,6 @@ EXPORT_SYMBOL(mhi_async_power_up);
 void mhi_control_error(struct mhi_controller *mhi_cntrl)
 {
 	enum MHI_PM_STATE cur_state, transition_state;
-	struct mhi_sfr_info *sfr_info = mhi_cntrl->mhi_sfr;
 
 	MHI_CNTRL_LOG("Enter with pm_state:%s MHI_STATE:%s\n",
 			to_mhi_pm_state_str(mhi_cntrl->pm_state),

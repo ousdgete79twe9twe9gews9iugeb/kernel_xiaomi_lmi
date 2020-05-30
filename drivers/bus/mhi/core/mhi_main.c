@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2018-2020, The Linux Foundation. All rights reserved. */
+/* Copyright (C) 2020 XiaoMi, Inc. */
 
 #include <linux/debugfs.h>
 #include <linux/device.h>
@@ -557,17 +558,17 @@ int mhi_queue_dma(struct mhi_device *mhi_dev,
 			MHI_RSCTRE_DATA_DWORD0(buf_ring->wp - buf_ring->base);
 		mhi_tre->dword[1] = MHI_RSCTRE_DATA_DWORD1;
 		/*
-		 * on RSC channel IPA HW has a minimum credit requirement before
-		 * switching to DB mode
-		 */
+		* on RSC channel IPA HW has a minimum credit requirement before
+		* switching to DB mode
+		*/
 		n_free_tre = mhi_get_no_free_descriptors(mhi_dev,
-				DMA_FROM_DEVICE);
+		DMA_FROM_DEVICE);
 		n_queued_tre = tre_ring->elements - n_free_tre;
 		read_lock_bh(&mhi_chan->lock);
 		if (mhi_chan->db_cfg.db_mode &&
 				n_queued_tre < MHI_RSC_MIN_CREDITS)
 			ring_db = false;
-		read_unlock_bh(&mhi_chan->lock);
+			read_unlock_bh(&mhi_chan->lock);
 	} else {
 		mhi_tre->ptr = MHI_TRE_DATA_PTR(buf_info->p_addr);
 		mhi_tre->dword[0] = MHI_TRE_DATA_DWORD0(buf_info->len);
@@ -990,12 +991,12 @@ static int parse_xfer_event(struct mhi_controller *mhi_cntrl,
 		mhi_chan->mode_change++;
 
 		/*
-		 * on RSC channel IPA HW has a minimum credit requirement before
-		 * switching to DB mode
-		 */
+		* on RSC channel IPA HW has a minimum credit requirement before
+		* switching to DB mode
+		*/
 		if (mhi_chan->xfer_type == MHI_XFER_RSC_DMA) {
 			n_free_tre = mhi_get_no_free_descriptors(
-					mhi_chan->mhi_dev, DMA_FROM_DEVICE);
+			mhi_chan->mhi_dev, DMA_FROM_DEVICE);
 			n_queued_tre = tre_ring->elements - n_free_tre;
 			if (n_queued_tre < MHI_RSC_MIN_CREDITS)
 				ring_db = false;
@@ -1118,6 +1119,7 @@ static void mhi_process_cmd_completion(struct mhi_controller *mhi_cntrl,
 	struct mhi_tre *cmd_pkt;
 	struct mhi_chan *mhi_chan;
 	struct mhi_sfr_info *sfr_info;
+	struct mhi_timesync *mhi_tsync;
 	enum mhi_cmd_type type;
 	u32 chan;
 
@@ -1134,6 +1136,11 @@ static void mhi_process_cmd_completion(struct mhi_controller *mhi_cntrl,
 		sfr_info->ccs = MHI_TRE_GET_EV_CODE(tre);
 		complete(&sfr_info->completion);
 		break;
+	case MHI_CMD_TYPE_TSYNC:
+		mhi_tsync = mhi_cntrl->mhi_tsync;
+		mhi_tsync->ccs = MHI_TRE_GET_EV_CODE(tre);
+		complete(&mhi_tsync->completion);
+		break;
 	default:
 		chan = MHI_TRE_GET_CMD_CHID(cmd_pkt);
 		if (chan >= mhi_cntrl->max_chan) {
@@ -1145,7 +1152,6 @@ static void mhi_process_cmd_completion(struct mhi_controller *mhi_cntrl,
 		mhi_chan->ccs = MHI_TRE_GET_EV_CODE(tre);
 		complete(&mhi_chan->completion);
 		write_unlock_bh(&mhi_chan->lock);
-		break;
 	}
 
 	mhi_del_ring_element(mhi_cntrl, mhi_ring);
@@ -1446,6 +1452,22 @@ int mhi_process_bw_scale_ev_ring(struct mhi_controller *mhi_cntrl,
 	struct mhi_link_info link_info, *cur_info = &mhi_cntrl->mhi_link_info;
 	int result, ret = 0;
 
+	if (unlikely(MHI_EVENT_ACCESS_INVALID(mhi_cntrl->pm_state))) {
+		MHI_LOG("No EV access, PM_STATE:%s\n",
+			to_mhi_pm_state_str(mhi_cntrl->pm_state));
+		ret = -EIO;
+		goto exit_no_lock;
+	}
+
+	if (mhi_cntrl->need_force_m3 && !mhi_cntrl->force_m3_done)
+		goto exit_no_lock;
+
+	ret = __mhi_device_get_sync(mhi_cntrl);
+	if (ret)
+		goto exit_no_lock;
+
+	mutex_lock(&mhi_cntrl->pm_mutex);
+
 	spin_lock_bh(&mhi_event->lock);
 	dev_rp = mhi_to_virtual(ev_ring, er_ctxt->rp);
 
@@ -1637,6 +1659,14 @@ irqreturn_t mhi_intvec_threaded_handlr(int irq_number, void *dev)
 		goto exit_intvec;
 	}
 
+	state = mhi_get_mhi_state(mhi_cntrl);
+	ee = mhi_cntrl->ee;
+	mhi_cntrl->ee = mhi_get_exec_env(mhi_cntrl);
+	MHI_LOG("local ee: %s device ee:%s dev_state:%s\n",
+		TO_MHI_EXEC_STR(ee),
+		TO_MHI_EXEC_STR(mhi_cntrl->ee),
+		TO_MHI_STATE_STR(state));
+
 	if (state == MHI_STATE_SYS_ERR) {
 		MHI_ERR("MHI system error detected\n");
 		pm_state = mhi_tryset_pm_state(mhi_cntrl,
@@ -1754,6 +1784,12 @@ int mhi_send_cmd(struct mhi_controller *mhi_cntrl,
 		cmd_tre->dword[0] = MHI_TRE_CMD_SFR_CFG_DWORD0
 						(sfr_info->len - 1);
 		cmd_tre->dword[1] = MHI_TRE_CMD_SFR_CFG_DWORD1;
+		break;
+	case MHI_CMD_TIMSYNC_CFG:
+		cmd_tre->ptr = MHI_TRE_CMD_TSYNC_CFG_PTR;
+		cmd_tre->dword[0] = MHI_TRE_CMD_TSYNC_CFG_DWORD0;
+		cmd_tre->dword[1] = MHI_TRE_CMD_TSYNC_CFG_DWORD1
+			(mhi_cntrl->mhi_tsync->er_index);
 		break;
 	}
 
